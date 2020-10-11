@@ -3,51 +3,44 @@ pragma solidity >=0.4.25 <0.7.0;
 // The Sustainers contract specifies the workings of a system made up of Purposes and their stewards, constrained only by time.
 // Each Purpose has a predefined sustainability that can be contributed to by any sustainer, after which the surplus get's redistributed proportionally to sustainers.
 contract Sustainers {
-
     // The Purpose structure represents a purpose envisioned by a steward, and accounts for who has contributed to the vision.
     struct Purpose {
+        // The address which is stewarding this purpose.
+        address steward;
+        // The amount that represents sustainability for this purpose.
+        uint256 sustainability;
         // The description of this purpose. This is an opportunity for the steward to make the case
         // for this Purpose's sutainability on-chain.
         string description;
-
-        // The address which is stewarding this purpose.
-        address steward;
-
-        // The amount that represents sustainability for this purpose.
-        uint sustainability;
-
-        // The number of days this Purpose can be sustained according to `sustainability`.
-        uint duration;
-
+        // The number of days this Purpose can be sustained for according to `sustainability`.
+        uint256 duration;
         // The time when this Purpose will become active.
-        uint start;
-
+        uint256 start;
         // The running amount that's been contributed to sustaining this purpose.
-        unit sustainment;
-
+        uint256 sustainment;
         // The addresses who have helped to sustain this purpose.
         address[] sustainers;
-
         // The amount each address has contributed to the sustaining of this purpose.
-        mapping(address => uint) sustainments;
-
+        mapping(address => uint256) sustainments;
         // The net amount each address has contributed to the sustaining of this purpose after redistribution.
-        mapping(address => uint) netSustainments;
-
+        mapping(address => uint256) netSustainments;
         // The amount that has been redistributed to each address as a consequence of abundant sustainment of this Purpose.
-        mapping(address => uint) redistribution;
+        mapping(address => uint256) redistribution;
+        // Helper to verify this Purpose exists.
+        bool exists;
     }
 
-    // The current Chapter, whos Purposes are immutable once the Purpose receives some sustainment.
-    // Chapter currentChapter;
-    mapping(uint => Purpose) currentPurposes;
+    // The past Purposes, which are entirely immutable.
+    mapping(address => Purpose[]) pastPurposes;
 
-    // The next Chapter, which is entirely mutable until it becomes the current Chapter.
-    // Chapter nextChapter;
-    mapping(uint => Purpose) nextPurposes;
+    // The current Purposes, which are immutable once the Purpose receives some sustainment.
+    mapping(address => Purpose) currentPurposes;
+
+    // The next Purposes, which are entirely mutable until they becomes the current Purpose.
+    mapping(address => Purpose) nextPurposes;
 
     // The amount that has been redistributed to each address as a consequence of overall abundance.
-    mapping(address => uint) redistribution;
+    mapping(address => uint256) redistribution;
 
     // IERC20 public daiInstance;
 
@@ -58,169 +51,158 @@ contract Sustainers {
     //   daiInstance = _daiInstance;
     // }
 
-    function updateSustainability(uint _sustainability) public {
-      Purpose storage purposeToUpdate(msg.sender);
-      purpose.sustainability = _sustainability;
+    function updateSustainability(uint256 _sustainability) public {
+        Purpose storage purpose = purposeToUpdate(msg.sender);
+        purpose.sustainability = _sustainability;
     }
 
-    function updateDuration(uint _duration) public {
-      Purpose storage purposeToUpdate(msg.sender);
-      purpose.duration = _duration;
+    function updateDuration(uint256 _duration) public {
+        Purpose storage purpose = purposeToUpdate(msg.sender);
+        purpose.duration = _duration;
     }
-    
-    function updateDescription(string _description) public {
-      Purpose storage purposeToUpdate(msg.sender);
-      purpose.description = _description;
+
+    function updateDescription(string memory _description) public {
+        Purpose storage purpose = purposeToUpdate(msg.sender);
+        purpose.description = _description;
+    }
+
+    // Contribute a specified amount to the sustainability of the specified Steward's active Purpose.
+    // If the amount results in surplus, redistribute the surplus proportionally to sustainers of the Purpose.
+    function sustain(address _steward, uint256 _amount) public {
+        // The function first tries to operate on the state of the current Purpose belonging to the specified steward.
+        Purpose storage currentPurpose = currentPurposes[_steward];
+
+        require(
+            currentPurpose.exists,
+            "This account isn't currently stewarding a purpose."
+        );
+        require(_amount > 0, "The sustainment amount should be positive.");
+
+        sustainPurpose(currentPurpose, _steward, _amount);
+    }
+
+    // A sender can withdrawl funds that have been redistributed to it.
+    function withdrawl(uint256 _amount) public {
+        require(redistribution[msg.sender] > 0, "There's nothing to collect.");
+
+        //TODO: transfer to msg.sender wallet;
     }
 
     // Contribute a specified amount to the sustainability of a Purpose stewarded by the specified address.
     // If the amount results in surplus, redistribute the surplus proportionally to sustainers of the Purpose.
-    function sustain(address _steward, uint _amount) public {
+    function sustainPurpose(
+        Purpose storage _purpose,
+        address _steward,
+        uint256 _amount
+    ) private {
+        // If the current time is greater than the current Purpose's endTime, progress to the next Purpose.
+        if (now > _purpose.start + (_purpose.duration * 1 days)) {
+            Purpose storage nextPurpose = nextPurposes[_steward];
+            require(
+                nextPurpose.exists,
+                "This account isn't currently stewarding a purpose."
+            );
+            pastPurposes[_steward].push(_purpose);
+            currentPurposes[_steward] = nextPurposes[_steward];
+            sustainPurpose(_purpose, _steward, _amount);
+            return;
+        }
 
-      // The function operates on the state of the current Purpose belonging to the specified steward.
-      Purpose storage currentPurpose = currentPurposes[_steward];
+        /// ************* Before changing state:
+        // Save the amount to send to the steward of the Purpose.
+        uint256 amountToSendToSteward = _purpose.sustainability -
+            _purpose.sustainment >
+            _amount
+            ? _amount
+            : _purpose.sustainability - _purpose.sustainment;
+        // Save if the message sender is contributing to this Purpose for the first time.
+        bool isNewSustainer = _purpose.sustainments[msg.sender] == 0;
+        /// *************
 
-      // If the current time is greater than the current Chapter's endTime, progress to the next Chapter.
-      while (now > currentPurpose.start * currentPurpose.duration * days) {
-        progressPurpose();
-        sustain(_steward, _amount);
-        return;
-      }
+        /// ************* TODO: Transfer an amount to the steward:
+        // bool success = daiInstance.transferFrom(msg.sender, address(this), amountToSend);
+        // require(success, "Transfer failed.");
+        /// *************
 
-      require(currentPurpose > 0, "This account isn't stewarding a purpose yet.");
-      require(_amount > 0, "The sustainment amount should be positive.")
+        /// ************* Update the state of the Purpose:
+        // Increment the sustainments to the Purpose made by the message sender.
+        _purpose.sustainments[msg.sender] += _amount;
+        // Increment the total amount contributed to the sustainment of the Purpose.
+        _purpose.sustainment += _amount;
+        // Add the message sender as a sustainer of the Purpose if this is the first sustainment it's making to it.
+        if (isNewSustainer) {
+            _purpose.sustainers.push(msg.sender);
+        }
+        /// *************
 
-      //// ************* Before changing state:
-      ///
-      // Save the amount to send to the steward of the Purpose.
-      uint amountToSendToSteward = currentPurpose.sustainability - currentPurpose.sustainment > amount ? amount : currentPurpose.sustainability - currentPurpose.sustainment;
-      // Save if the message sender is contributing to this Purpose for the first time.
-      bool isNewSustainer = currentPurpose.sustainments[msg.sender] == 0;
-      ///
-      //// *************
-
-
-      //// ************* TODO: Transfer an amount to the steward:
-      ///
-      // bool success = daiInstance.transferFrom(msg.sender, address(this), amountToSend);
-      // require(success, "Transfer failed.");
-      ///
-      //// *************
-
-
-      //// ************* Update the state of the Purpose:
-      ///
-      // Increment the sustainments to the Purpose made by the message sender.
-      currentPurpose.sustainments[msg.sender] += _amount;
-      // Increment the total amount contributed to the sustainment of the Purpose.
-      currentPurpose.sustainment += _amount;
-      // Add the message sender as a sustainer of the Purpose if this is the first sustainment it's making to it.
-      if (isNewSustainer) {
-        currentPurpose.sustainers.push(msg.sender);
-      }
-      ///
-      //// *************
-
-
-      //// ************* Manage redistribution:
-      /// 
-      // Save the amount to distribute before changing the state.
-      uint amountToDistribute = currentPurpose.sustainment <= currentPurpose.sustainability ? 0 : currentPurpose.sustainment - currentPurpose.sustainability;
-      // Redistribute any leftover amount.
-      if (amountToDistribute > 0) {
-        redistribute(currentPurpose, amountToDistribute);
-      }
-      /// 
-      //// *************
-    }
- 
-    // A sender can withdrawl funds that have been redistributed to it.
-    function withdrawl(uint _amount) public {
-      require(redistribution[msg.sender] > 0, "There's nothing to collect.")
-
-      //TODO: transfer to msg.sender wallet; 
+        /// ************* Manage redistribution:
+        // Save the amount to distribute before changing the state.
+        uint256 amountToDistribute = _purpose.sustainment <=
+            _purpose.sustainability
+            ? 0
+            : _purpose.sustainment - _purpose.sustainability;
+        // Redistribute any leftover amount.
+        if (amountToDistribute > 0) {
+            redistribute(_purpose, amountToDistribute);
+        }
+        /// *************
     }
 
-    function progressPurpose(address _steward) internal {
-      //TODO not sure consequence of referencing like this.
-      Purpose currentPurpose = currentPurposes[_steward];
-      unit currentPurposeDuration = currentPurpose.duration;
-      unit currentPurposeSustainability = currentPurpose.sustainability;
-      unit currentPurposeDescription = currentPurpose.description;
+    // function progressPurpose(address _steward) private {
+    //   require(nextPurposes[_steward] > 0, "");
 
-      //TODO: fix up.
-      currentPurposes[_steward] = nextChapter[_steward];
-      nextChapter[_steward] = Chapter(now, currentPurposeDuration, _steward, currentPurposeSustainability, 0, description);
-    }
+    //   //TODO not sure consequence of referencing like this.
+    //   Purpose currentPurpose = currentPurposes[_steward];
+    //   unit currentPurposeDuration = currentPurpose.duration;
+    //   unit currentPurposeSustainability = currentPurpose.sustainability;
+    //   unit currentPurposeDescription = currentPurpose.description;
 
-    // The sustainability of a Purpose cannot be changed if there have been sustainments made to it.
-    function purposeToUpdate(address _steward) internal returns Purpose {
-      // If the steward does not have a current Purpose in the current Chapter, make one and return it.
-      if (currentPurposes[_steward] == 0) {
-          Purpose storage purpose = currentPurposes[_steward];
-          return purpose
-      } 
+    //   //TODO: fix up.
+    //   currentPurposes[_steward] = nextChapter[_steward];
+    //   nextChapter[_steward] = 0;
+    //   // Chapter(now, currentPurposeDuration, _steward, currentPurposeSustainability, 0, description);
+    // }
 
-      // If the steward's current Purpose does not yet have sustainments, return it.
-      if (currentPurposes[_steward].sustainment == 0) {
-        return currentPurposes[_steward];
-      } 
+    // The sustainability of a Purpose cannot be updated if there have been sustainments made to it.
+    function purposeToUpdate(address _steward)
+        private
+        returns (Purpose storage)
+    {
+        // If the steward does not have a current Purpose in the current Chapter, make one and return it.
+        if (!currentPurposes[_steward].exists) {
+            Purpose storage purpose = currentPurposes[_steward];
+            purpose.exists = true;
+            return purpose;
+        }
 
-      // If the steward does not have a Purpose in the next Chapter, make one and return it.
-      if (nextPurposes[_steward] == 0) {
-          Purpose storage purpose = nextPurposes[_steward];
-          return purpose;
-      } 
+        // If the steward's current Purpose does not yet have sustainments, return it.
+        if (currentPurposes[_steward].sustainment == 0) {
+            return currentPurposes[_steward];
+        }
 
-      // Return the steward's next Purpose.
-      return nextPurposes[_steward];
+        // If the steward does not have a Purpose in the next Chapter, make one and return it.
+        if (!nextPurposes[_steward].exists) {
+            Purpose storage purpose = nextPurposes[_steward];
+            purpose.exists = true;
+            return purpose;
+        }
+
+        // Return the steward's next Purpose.
+        return nextPurposes[_steward];
     }
 
     // Proportionally allocate the specified amount to the contributors of the specified Purpose,
     // meaning each sustainer will receive a portion of the specified amount equivalent to the portion of the total
     // amount contributed to the sustainment of the Purpose that they are responsible for.
-    function redistribute(Purpose purpose, uint amount) internal {
-      assert(amount > 0);
+    function redistribute(Purpose storage purpose, uint256 amount) internal {
+        assert(amount > 0);
 
-      // For each sustainer, calculate their share of the sustainment and allocate a proportional share of the amount.
-      for (uint i=0; i<purpose.sustainers.length; i++) {
-        address sustainer = purpose.sustainers[i];
-        uint sustainerSustainment = purpose.sustainments[sustainer];
-        uint amountShare = sustainerSustainment * amount / purpose.sustainment
-        redistribution[sustainer] += amountShare;
-      }
+        // For each sustainer, calculate their share of the sustainment and allocate a proportional share of the amount.
+        for (uint256 i = 0; i < purpose.sustainers.length; i++) {
+            address sustainer = purpose.sustainers[i];
+            uint256 amountShare = (purpose.sustainments[sustainer] * amount) /
+                purpose.sustainment;
+            redistribution[sustainer] += amountShare;
+        }
     }
 }
-
-//ARCHIVE
-// function getNeedAmount(address entity) public view returns (uint256) {
-//     return needs[entity].amount;
-// }
-// event Transfer(address indexed _from, address indexed _to, uint256 _value);
-
-// function sendCoin(address receiver, uint256 amount)
-//     public
-//     returns (bool sufficient)
-// {
-//     if (balances[msg.sender] < amount) return false;
-//     balances[msg.sender] -= amount;
-//     balances[receiver] += amount;
-//     emit Transfer(msg.sender, receiver, amount);
-//     return true;
-// }
-
-// function getBalanceInEth(address addr) public view returns (uint256) {
-//     return ConvertLib.convert(getBalance(addr), 2);
-// }
-
-// function getNeedAmount(address entity) public view returns (uint256) {
-//     return needs[entity].amount;
-// }
-
-// function getContribution(address entity, address contributer)
-//     public
-//     view
-//     returns (uint256)
-// {
-//     return needs[entity].contributions[contributer];
-// }
